@@ -26,11 +26,15 @@ menu = ReplyKeyboardMarkup([
 # ===================== GEMINI AI (FIXED) =====================
 
 def ask_ai(prompt):
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
 
     payload = {
         "contents": [
-            {"parts": [{"text": prompt}]}
+            {
+                "parts": [
+                    {"text": prompt}
+                ]
+            }
         ]
     }
 
@@ -44,9 +48,7 @@ def ask_ai(prompt):
         return data["candidates"][0]["content"]["parts"][0]["text"]
 
     except Exception as e:
-        return f"⚠️ AI Crash: {str(e)}"
-
-# ===================== START =====================
+        return f"⚠️ AI Crash: {str(e)}"# ===================== START =====================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     users.add(update.effective_user.id)
