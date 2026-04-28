@@ -1,9 +1,21 @@
 import os
 import logging
 import requests
-import time
-from telegram import Update, ReplyKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
+import json
+from telegram import (
+    Update,
+    ReplyKeyboardMarkup,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup
+)
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    MessageHandler,
+    ContextTypes,
+    CallbackQueryHandler,
+    filters
+)
 
 # ===================== CONFIG =====================
 
@@ -13,26 +25,90 @@ ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 
 logging.basicConfig(level=logging.INFO)
 
-users = set()
+DB_FILE = "db.json"
 
-# ===================== MENU =====================
+# ===================== DATABASE =====================
+
+def load_db():
+    try:
+        with open(DB_FILE, "r") as f:
+            return json.load(f)
+    except:
+        return {}
+
+def save_db():
+    with open(DB_FILE, "w") as f:
+        json.dump(db, f)
+
+db = load_db()
+
+def init_user(uid):
+    if str(uid) not in db:
+        db[str(uid)] = {
+            "xp": 0,
+            "level": 1,
+            "messages": []
+        }
+        save_db()
+
+def add_xp(uid):
+    user = db[str(uid)]
+    user["xp"] += 1
+
+    if user["xp"] >= user["level"] * 5:
+        user["xp"] = 0
+        user["level"] += 1
+
+    save_db()
+
+def add_memory(uid, text):
+    db[str(uid)]["messages"].append(text)
+    db[str(uid)]["messages"] = db[str(uid)]["messages"][-10:]
+    save_db()
+
+def get_memory(uid):
+    return " | ".join(db[str(uid)]["messages"])
+
+# ===================== UI =====================
 
 menu = ReplyKeyboardMarkup([
-    ["🤖 AI Chat", "📚 Education"],
-    ["🧠 Coding", "🛠 Tools"],
-    ["🎮 Fun", "⚡ Utilities"],
-    ["👑 Admin Panel"]
+    ["🤖 AI Chat", "👑 Admin Panel"],
+    ["🧑‍💻 Level"]
 ], resize_keyboard=True)
 
-# ===================== AI ENGINE (GROQ) =====================
+admin_menu = InlineKeyboardMarkup([
+    [InlineKeyboardButton("📊 Stats", callback_data="stats")],
+    [InlineKeyboardButton("👥 Users", callback_data="users")],
+    [InlineKeyboardButton("🏓 Ping", callback_data="ping")],
+    [InlineKeyboardButton("🔙 Close", callback_data="back")]
+])
+
+# ===================== AI ENGINE =====================
 
 cache = {}
-last_request = {}
 
-def ask_ai(prompt):
-    # cache (saves API calls)
+def ask_ai(prompt, uid):
+
+    init_user(uid)
+    add_xp(uid)
+
     if prompt in cache:
         return cache[prompt]
+
+    memory = get_memory(uid)
+    level = db[str(uid)]["level"]
+
+    final_prompt = f"""
+User Level: {level}
+
+Memory:
+{memory}
+
+User:
+{prompt}
+
+Respond clearly and naturally.
+"""
 
     url = "https://api.groq.com/openai/v1/chat/completions"
 
@@ -43,9 +119,7 @@ def ask_ai(prompt):
 
     payload = {
         "model": "llama-3.3-70b-versatile",
-        "messages": [
-            {"role": "user", "content": prompt}
-        ]
+        "messages": [{"role": "user", "content": final_prompt}]
     }
 
     try:
@@ -53,11 +127,13 @@ def ask_ai(prompt):
         data = res.json()
 
         if "error" in data:
-            return f"⚠️ AI Error: {data['error'].get('message', 'Unknown error')}"
+            return f"⚠️ AI Error: {data['error'].get('message', 'Unknown')}"
 
         reply = data["choices"][0]["message"]["content"]
 
         cache[prompt] = reply
+        add_memory(uid, prompt)
+
         return reply
 
     except Exception as e:
@@ -66,70 +142,77 @@ def ask_ai(prompt):
 # ===================== START =====================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    users.add(update.effective_user.id)
+    uid = update.effective_user.id
+    init_user(uid)
 
     await update.message.reply_text(
-        "🤖 Welcome to X AI Bot\n\n"
-        "✔ AI Chat Enabled\n"
-        "✔ Admin Panel Ready\n"
-        "✔ Tools Loaded",
+        "🤖 X AI SYSTEM ONLINE\n\nWelcome!",
         reply_markup=menu
     )
 
-# ===================== BASIC COMMANDS =====================
+# ===================== LEVEL =====================
 
-async def ping(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🏓 Pong!")
+async def level(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    init_user(uid)
 
-async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(f"👥 Users: {len(users)}")
+    lvl = db[str(uid)]["level"]
+    xp = db[str(uid)]["xp"]
 
-async def user_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(f"🆔 ID: {update.effective_user.id}")
+    await update.message.reply_text(
+        f"🧑‍💻 Level: {lvl}\n⚡ XP: {xp}/{lvl * 5}"
+    )
 
-# ===================== ADMIN PANEL =====================
+# ===================== ADMIN =====================
 
 async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
-        await update.message.reply_text("⛔ Access Denied")
-        return
+        return await update.message.reply_text("⛔ Access Denied")
 
-    await update.message.reply_text(
-        "👑 ADMIN PANEL\n\n"
-        "/stats - users\n"
-        "/users - list users\n"
-        "/ping - bot test\n"
-    )
+    await update.message.reply_text("👑 Admin Panel", reply_markup=admin_menu)
 
-async def users_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        return await update.message.reply_text("⛔ No access")
+# ===================== BUTTONS =====================
 
-    if not users:
-        return await update.message.reply_text("No users yet")
+async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
 
-    text = "👥 USERS:\n\n" + "\n".join(str(u) for u in list(users)[:50])
-    await update.message.reply_text(text)
+    uid = q.from_user.id
 
-# ===================== AI CHAT =====================
+    if q.data == "stats":
+        await q.edit_message_text(f"👥 Users: {len(db)}")
 
-async def ai_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = " ".join(context.args)
+    elif q.data == "users":
+        if uid != ADMIN_ID:
+            return await q.edit_message_text("⛔ No access")
 
-    if not text:
-        await update.message.reply_text("Usage: /ai hello")
-        return
+        text = "👥 USERS:\n\n" + "\n".join(list(db.keys())[:50])
+        await q.edit_message_text(text)
 
-    await update.message.reply_text(ask_ai(text))
+    elif q.data == "ping":
+        await q.edit_message_text("🏓 Pong!")
 
-# ===================== SMART CHAT =====================
+    elif q.data == "back":
+        await q.edit_message_text("👑 Closed")
+
+# ===================== CHAT =====================
 
 async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    users.add(update.effective_user.id)
+    uid = update.effective_user.id
+    init_user(uid)
 
     text = update.message.text
-    reply = ask_ai(text)
 
+    if text == "🤖 AI Chat":
+        return await update.message.reply_text("💬 Send anything...")
+
+    if text == "👑 Admin Panel":
+        return await admin(update, context)
+
+    if text == "🧑‍💻 Level":
+        return await level(update, context)
+
+    reply = ask_ai(text, uid)
     await update.message.reply_text(reply)
 
 # ===================== APP =====================
@@ -140,14 +223,11 @@ if not BOT_TOKEN:
 app = ApplicationBuilder().token(BOT_TOKEN).build()
 
 app.add_handler(CommandHandler("start", start))
-app.add_handler(CommandHandler("ping", ping))
-app.add_handler(CommandHandler("stats", stats))
-app.add_handler(CommandHandler("id", user_id))
 app.add_handler(CommandHandler("admin", admin))
-app.add_handler(CommandHandler("users", users_cmd))
-app.add_handler(CommandHandler("ai", ai_command))
+app.add_handler(CommandHandler("level", level))
 
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat))
+app.add_handler(CallbackQueryHandler(buttons))
 
 print("🤖 Bot running...")
 app.run_polling()
