@@ -2,14 +2,8 @@ import os
 import json
 import logging
 import requests
-from telegram import Update, ReplyKeyboardMarkup
-from telegram.ext import (
-    ApplicationBuilder,
-    CommandHandler,
-    MessageHandler,
-    ContextTypes,
-    filters
-)
+from telegram import Update
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 
 # ===================== CONFIG =====================
 
@@ -19,7 +13,9 @@ ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 
 logging.basicConfig(level=logging.INFO)
 
-DB_FILE = "db.json"
+DB_FILE = "agent_db.json"
+
+users = set()
 
 # ===================== DATABASE =====================
 
@@ -39,53 +35,68 @@ db = load_db()
 def init_user(uid):
     if str(uid) not in db:
         db[str(uid)] = {
-            "xp": 0,
-            "level": 1,
-            "memory": []
+            "memory": [],
+            "tasks": [],
+            "goals": [],
+            "mode": "AUTONOMOUS"
         }
         save_db()
 
 def add_memory(uid, text):
     db[str(uid)]["memory"].append(text)
-    db[str(uid)]["memory"] = db[str(uid)]["memory"][-10:]
+    db[str(uid)]["memory"] = db[str(uid)]["memory"][-15:]
     save_db()
 
-def get_memory(uid):
-    return " | ".join(db[str(uid)]["memory"])
-
-def add_xp(uid):
-    user = db[str(uid)]
-    user["xp"] += 1
-
-    if user["xp"] >= user["level"] * 5:
-        user["xp"] = 0
-        user["level"] += 1
-
+def add_task(uid, task):
+    db[str(uid)]["tasks"].append(task)
+    db[str(uid)]["tasks"] = db[str(uid)]["tasks"][-10:]
     save_db()
+
+def add_goal(uid, goal):
+    db[str(uid)]["goals"].append(goal)
+    db[str(uid)]["goals"] = db[str(uid)]["goals"][-10:]
+    save_db()
+
+# ===================== INTELLIGENCE LAYER =====================
+
+def intelligence_layer(uid, text):
+    return f"""
+You are an autonomous AI agent.
+
+User: {text}
+
+Memory:
+{db[str(uid)]['memory']}
+
+Goals:
+{db[str(uid)]['goals']}
+
+Tasks:
+{db[str(uid)]['tasks']}
+
+Decide:
+- normal response
+- TASK:
+- PLAN:
+Be structured and intelligent.
+"""
 
 # ===================== AI ENGINE =====================
 
-def ask_ai(prompt, uid):
+def ai(prompt, uid):
 
     init_user(uid)
-    add_xp(uid)
 
-    memory = get_memory(uid)
-    level = db[str(uid)]["level"]
+    system = """
+You are AI AUTONOMOUS AGENT v10.
 
-    system_prompt = f"""
-You are an advanced AI system inside a Telegram bot.
+You are a structured reasoning system.
 
-User Level: {level}
-
-User Memory:
-{memory}
-
-IMPORTANT TASK:
-Generate useful, creative responses OR suggest dynamic categories when asked.
-
-User Message:
-{prompt}
+Rules:
+- respond smartly
+- or output TASK:
+- or output PLAN:
+- never be random
 """
 
     url = "https://api.groq.com/openai/v1/chat/completions"
@@ -97,99 +108,122 @@ User Message:
 
     payload = {
         "model": "llama-3.3-70b-versatile",
-        "messages": [{"role": "user", "content": system_prompt}]
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": prompt}
+        ]
     }
 
     try:
         res = requests.post(url, json=payload, headers=headers, timeout=25)
         data = res.json()
-
-        if "error" in data:
-            return f"⚠️ AI Error: {data['error'].get('message', 'Unknown')}"
-
-        reply = data["choices"][0]["message"]["content"]
-
-        add_memory(uid, prompt)
-
-        return reply
-
+        return data["choices"][0]["message"]["content"]
     except Exception as e:
-        return f"⚠️ AI Crash: {str(e)}"
-
-# ===================== MAIN MENU =====================
-
-menu = ReplyKeyboardMarkup([
-    ["🤖 AI HUB"],
-    ["⚡ Generate Menu"]
-], resize_keyboard=True)
+        return f"⚠️ ERROR: {str(e)}"
 
 # ===================== START =====================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
+    users.add(uid)
     init_user(uid)
 
     await update.message.reply_text(
-        "🤖 DYNAMIC AI SYSTEM ONLINE\n\nNo fixed categories — AI creates everything.",
-        reply_markup=menu
+        "🤖 AUTONOMOUS AI AGENT v10 ONLINE\n\nAdmin + autonomy system active."
     )
 
-# ===================== DYNAMIC MENU GENERATOR =====================
+# ===================== ADMIN PANEL =====================
 
-async def generate_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    uid = update.effective_user.id
+async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
-    prompt = """
-Create 6 creative Telegram bot categories.
-Each category must be short (1-2 words only).
-Make them unique, futuristic, and useful.
-Return ONLY the list.
-"""
-
-    result = ask_ai(prompt, uid)
-
-    # convert AI output into buttons
-    items = result.split("\n")
-    items = [i.strip("-• ") for i in items if i.strip()]
-
-    keyboard = [[item] for item in items[:6]]
+    if update.effective_user.id != ADMIN_ID:
+        return await update.message.reply_text("⛔ ACCESS DENIED")
 
     await update.message.reply_text(
-        "⚡ AI GENERATED MENU:",
-        reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+        f"""
+👑 ADMIN PANEL
+
+👥 Users: {len(users)}
+
+Commands:
+/stats
+/users
+/ping
+"""
     )
 
-# ===================== AI HUB =====================
+async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
-async def ai_hub(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("💬 Talk to AI directly — no limits.")
+    if update.effective_user.id != ADMIN_ID:
+        return
 
-# ===================== CHAT =====================
+    await update.message.reply_text(f"👥 Total Users: {len(users)}")
+
+async def list_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+    if update.effective_user.id != ADMIN_ID:
+        return
+
+    text = "\n".join(str(u) for u in list(users)[:50])
+    await update.message.reply_text(f"👥 USERS:\n{text}")
+
+# ===================== MAIN CHAT =====================
 
 async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
     uid = update.effective_user.id
+    users.add(uid)
     init_user(uid)
 
     text = update.message.text
 
-    if text == "🤖 AI HUB":
-        return await ai_hub(update, context)
+    # ================= GOALS =================
+    if "help me" in text or "want to" in text:
+        add_goal(uid, text)
 
-    if text == "⚡ Generate Menu":
-        return await generate_menu(update, context)
+    # ================= INTELLIGENCE =================
 
-    reply = ask_ai(text, uid)
-    await update.message.reply_text(reply)
+    context_input = intelligence_layer(uid, text)
+    response = ai(context_input, uid)
 
-# ===================== APP =====================
+    # ================= TASK SYSTEM =================
+
+    if response.startswith("TASK:"):
+        task = response.replace("TASK:", "").strip()
+        add_task(uid, task)
+        add_memory(uid, text)
+        return await update.message.reply_text(f"📌 TASK:\n{task}")
+
+    # ================= PLAN SYSTEM =================
+
+    if response.startswith("PLAN:"):
+        plan = response.replace("PLAN:", "").strip()
+        add_memory(uid, text)
+        return await update.message.reply_text(f"🧠 PLAN:\n{plan}")
+
+    # ================= CONTINUATION =================
+
+    if "continue" in text.lower():
+        response = ai("Continue previous reasoning in deeper detail.", uid)
+
+    add_memory(uid, text)
+    await update.message.reply_text(response)
+
+# ===================== RUN =====================
 
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN missing")
 
 app = ApplicationBuilder().token(BOT_TOKEN).build()
 
+# CORE COMMANDS
 app.add_handler(CommandHandler("start", start))
+app.add_handler(CommandHandler("admin", admin))
+app.add_handler(CommandHandler("stats", stats))
+app.add_handler(CommandHandler("users", list_users))
+
+# CHAT ENGINE
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat))
 
-print("🤖 Dynamic AI Bot Running...")
+print("🤖 AUTONOMOUS AI AGENT v10 WITH ADMIN RUNNING...")
 app.run_polling()
