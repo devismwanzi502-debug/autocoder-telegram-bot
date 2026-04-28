@@ -2,7 +2,7 @@ import os
 import json
 import logging
 import requests
-from telegram import Update
+from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 
 # ===================== CONFIG =====================
@@ -13,9 +13,10 @@ ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 
 logging.basicConfig(level=logging.INFO)
 
-DB_FILE = "agent_db.json"
+DB_FILE = "kernel_v13.json"
 
 users = set()
+user_state = {}
 
 # ===================== DATABASE =====================
 
@@ -36,9 +37,7 @@ def init_user(uid):
     if str(uid) not in db:
         db[str(uid)] = {
             "memory": [],
-            "tasks": [],
-            "goals": [],
-            "mode": "AUTONOMOUS"
+            "mode": "HOME"
         }
         save_db()
 
@@ -47,57 +46,9 @@ def add_memory(uid, text):
     db[str(uid)]["memory"] = db[str(uid)]["memory"][-15:]
     save_db()
 
-def add_task(uid, task):
-    db[str(uid)]["tasks"].append(task)
-    db[str(uid)]["tasks"] = db[str(uid)]["tasks"][-10:]
-    save_db()
-
-def add_goal(uid, goal):
-    db[str(uid)]["goals"].append(goal)
-    db[str(uid)]["goals"] = db[str(uid)]["goals"][-10:]
-    save_db()
-
-# ===================== INTELLIGENCE LAYER =====================
-
-def intelligence_layer(uid, text):
-    return f"""
-You are an autonomous AI agent.
-
-User: {text}
-
-Memory:
-{db[str(uid)]['memory']}
-
-Goals:
-{db[str(uid)]['goals']}
-
-Tasks:
-{db[str(uid)]['tasks']}
-
-Decide:
-- normal response
-- TASK:
-- PLAN:
-Be structured and intelligent.
-"""
-
 # ===================== AI ENGINE =====================
 
 def ai(prompt, uid):
-
-    init_user(uid)
-
-    system = """
-You are AI AUTONOMOUS AGENT v10.
-
-You are a structured reasoning system.
-
-Rules:
-- respond smartly
-- or output TASK:
-- or output PLAN:
-- never be random
-"""
 
     url = "https://api.groq.com/openai/v1/chat/completions"
 
@@ -105,6 +56,12 @@ Rules:
         "Authorization": f"Bearer {GROQ_API_KEY}",
         "Content-Type": "application/json"
     }
+
+    system = """
+You are AI KERNEL v13.
+You are a helpful assistant inside a Telegram app UI.
+Be structured, short, and useful.
+"""
 
     payload = {
         "model": "llama-3.3-70b-versatile",
@@ -121,6 +78,40 @@ Rules:
     except Exception as e:
         return f"⚠️ ERROR: {str(e)}"
 
+# ===================== BUTTON MENUS =====================
+
+HOME_MENU = ReplyKeyboardMarkup([
+    ["🧠 AI HUB", "📚 LEARN HUB"],
+    ["💻 DEV HUB", "🧰 TOOLS HUB"],
+    ["🎮 FUN HUB", "👑 ADMIN"]
+], resize_keyboard=True)
+
+AI_MENU = ReplyKeyboardMarkup([
+    ["💬 Chat AI", "🧠 Deep Think"],
+    ["🔍 Explain", "🧩 Explore"],
+    ["⬅️ Back"]
+], resize_keyboard=True)
+
+LEARN_MENU = ReplyKeyboardMarkup([
+    ["📖 Learn", "🧪 Science"],
+    ["💰 Business", "⬅️ Back"]
+], resize_keyboard=True)
+
+DEV_MENU = ReplyKeyboardMarkup([
+    ["💻 Code", "🐞 Debug"],
+    ["⚙️ System Design", "⬅️ Back"]
+], resize_keyboard=True)
+
+TOOLS_MENU = ReplyKeyboardMarkup([
+    ["🛠 Utilities", "📊 Info"],
+    ["📂 Help", "⬅️ Back"]
+], resize_keyboard=True)
+
+FUN_MENU = ReplyKeyboardMarkup([
+    ["😂 Joke", "🎮 Ideas"],
+    ["🎭 Story", "⬅️ Back"]
+], resize_keyboard=True)
+
 # ===================== START =====================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -129,45 +120,27 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     init_user(uid)
 
     await update.message.reply_text(
-        "🤖 AUTONOMOUS AI AGENT v10 ONLINE\n\nAdmin + autonomy system active."
+        "🤖 AI KERNEL v13 ONLINE\nButton OS activated.",
+        reply_markup=HOME_MENU
     )
 
-# ===================== ADMIN PANEL =====================
+# ===================== ADMIN =====================
 
 async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if update.effective_user.id != ADMIN_ID:
-        return await update.message.reply_text("⛔ ACCESS DENIED")
+        return await update.message.reply_text("⛔ NO ACCESS")
 
     await update.message.reply_text(
         f"""
 👑 ADMIN PANEL
 
-👥 Users: {len(users)}
-
-Commands:
-/stats
-/users
-/ping
+Users: {len(users)}
+Memory nodes: {len(db)}
 """
     )
 
-async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    if update.effective_user.id != ADMIN_ID:
-        return
-
-    await update.message.reply_text(f"👥 Total Users: {len(users)}")
-
-async def list_users(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    if update.effective_user.id != ADMIN_ID:
-        return
-
-    text = "\n".join(str(u) for u in list(users)[:50])
-    await update.message.reply_text(f"👥 USERS:\n{text}")
-
-# ===================== MAIN CHAT =====================
+# ===================== CHAT ENGINE =====================
 
 async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
@@ -177,37 +150,93 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     text = update.message.text
 
-    # ================= GOALS =================
-    if "help me" in text or "want to" in text:
-        add_goal(uid, text)
+    # ================= MAIN HUBS =================
 
-    # ================= INTELLIGENCE =================
+    if text == "🧠 AI HUB":
+        return await update.message.reply_text("AI Hub", reply_markup=AI_MENU)
 
-    context_input = intelligence_layer(uid, text)
-    response = ai(context_input, uid)
+    if text == "📚 LEARN HUB":
+        return await update.message.reply_text("Learning Hub", reply_markup=LEARN_MENU)
 
-    # ================= TASK SYSTEM =================
+    if text == "💻 DEV HUB":
+        return await update.message.reply_text("Dev Hub", reply_markup=DEV_MENU)
 
-    if response.startswith("TASK:"):
-        task = response.replace("TASK:", "").strip()
-        add_task(uid, task)
-        add_memory(uid, text)
-        return await update.message.reply_text(f"📌 TASK:\n{task}")
+    if text == "🧰 TOOLS HUB":
+        return await update.message.reply_text("Tools Hub", reply_markup=TOOLS_MENU)
 
-    # ================= PLAN SYSTEM =================
+    if text == "🎮 FUN HUB":
+        return await update.message.reply_text("Fun Hub", reply_markup=FUN_MENU)
 
-    if response.startswith("PLAN:"):
-        plan = response.replace("PLAN:", "").strip()
-        add_memory(uid, text)
-        return await update.message.reply_text(f"🧠 PLAN:\n{plan}")
+    if text == "👑 ADMIN":
+        return await admin(update, context)
 
-    # ================= CONTINUATION =================
+    if text == "⬅️ Back":
+        return await update.message.reply_text("Main Menu", reply_markup=HOME_MENU)
 
-    if "continue" in text.lower():
-        response = ai("Continue previous reasoning in deeper detail.", uid)
+    # ================= AI ACTIONS =================
 
+    if text == "💬 Chat AI":
+        return await update.message.reply_text("Send any message to chat.")
+
+    if text == "🧠 Deep Think":
+        return await update.message.reply_text(ai("solve deeply step by step", uid))
+
+    if text == "🔍 Explain":
+        return await update.message.reply_text(ai("explain clearly and simply", uid))
+
+    if text == "🧩 Explore":
+        return await update.message.reply_text(ai("creative exploration mode", uid))
+
+    # ================= LEARN =================
+
+    if text == "📖 Learn":
+        return await update.message.reply_text(ai("teach topic simply", uid))
+
+    if text == "🧪 Science":
+        return await update.message.reply_text(ai("science explanations", uid))
+
+    if text == "💰 Business":
+        return await update.message.reply_text(ai("business ideas and startup plans", uid))
+
+    # ================= DEV =================
+
+    if text == "💻 Code":
+        return await update.message.reply_text(ai("act as senior programmer", uid))
+
+    if text == "🐞 Debug":
+        return await update.message.reply_text(ai("debug code problems", uid))
+
+    if text == "⚙️ System Design":
+        return await update.message.reply_text(ai("system architecture design", uid))
+
+    # ================= TOOLS =================
+
+    if text == "🛠 Utilities":
+        return await update.message.reply_text(ai("useful tools and utilities", uid))
+
+    if text == "📊 Info":
+        return await update.message.reply_text(ai("general information assistant", uid))
+
+    if text == "📂 Help":
+        return await update.message.reply_text("This is your AI OS. Use buttons.")
+
+    # ================= FUN =================
+
+    if text == "😂 Joke":
+        return await update.message.reply_text(ai("tell jokes", uid))
+
+    if text == "🎮 Ideas":
+        return await update.message.reply_text(ai("game ideas", uid))
+
+    if text == "🎭 Story":
+        return await update.message.reply_text(ai("creative story", uid))
+
+    # ================= DEFAULT AI =================
+
+    reply = ai(text, uid)
     add_memory(uid, text)
-    await update.message.reply_text(response)
+
+    await update.message.reply_text(reply)
 
 # ===================== RUN =====================
 
@@ -216,14 +245,9 @@ if not BOT_TOKEN:
 
 app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-# CORE COMMANDS
 app.add_handler(CommandHandler("start", start))
 app.add_handler(CommandHandler("admin", admin))
-app.add_handler(CommandHandler("stats", stats))
-app.add_handler(CommandHandler("users", list_users))
-
-# CHAT ENGINE
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat))
 
-print("🤖 AUTONOMOUS AI AGENT v10 WITH ADMIN RUNNING...")
+print("🤖 AI KERNEL v13 BUTTON OS RUNNING...")
 app.run_polling()
