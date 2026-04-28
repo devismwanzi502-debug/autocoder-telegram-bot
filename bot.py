@@ -1,13 +1,14 @@
 import os
 import logging
 import requests
+import time
 from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
 
 # ===================== CONFIG =====================
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 
 logging.basicConfig(level=logging.INFO)
@@ -23,44 +24,59 @@ menu = ReplyKeyboardMarkup([
     ["👑 Admin Panel"]
 ], resize_keyboard=True)
 
-# ===================== GEMINI AI (FIXED) =====================
+# ===================== AI ENGINE (GROQ) =====================
+
+cache = {}
+last_request = {}
 
 def ask_ai(prompt):
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
+    # cache (saves API calls)
+    if prompt in cache:
+        return cache[prompt]
+
+    url = "https://api.groq.com/openai/v1/chat/completions"
+
+    headers = {
+        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Content-Type": "application/json"
+    }
 
     payload = {
-        "contents": [
-            {
-                "parts": [
-                    {"text": prompt}
-                ]
-            }
+        "model": "llama-3.3-70b-versatile",
+        "messages": [
+            {"role": "user", "content": prompt}
         ]
     }
 
     try:
-        res = requests.post(url, json=payload, timeout=25)
+        res = requests.post(url, json=payload, headers=headers, timeout=25)
         data = res.json()
 
         if "error" in data:
             return f"⚠️ AI Error: {data['error'].get('message', 'Unknown error')}"
 
-        return data["candidates"][0]["content"]["parts"][0]["text"]
+        reply = data["choices"][0]["message"]["content"]
+
+        cache[prompt] = reply
+        return reply
 
     except Exception as e:
-        return f"⚠️ AI Crash: {str(e)}"# ===================== START =====================
+        return f"⚠️ AI Crash: {str(e)}"
+
+# ===================== START =====================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     users.add(update.effective_user.id)
 
     await update.message.reply_text(
         "🤖 Welcome to X AI Bot\n\n"
-        "✔ AI Chat Active\n"
-        "✔ Tools Ready",
+        "✔ AI Chat Enabled\n"
+        "✔ Admin Panel Ready\n"
+        "✔ Tools Loaded",
         reply_markup=menu
     )
 
-# ===================== BASIC =====================
+# ===================== BASIC COMMANDS =====================
 
 async def ping(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🏓 Pong!")
@@ -71,17 +87,18 @@ async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def user_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"🆔 ID: {update.effective_user.id}")
 
-# ===================== ADMIN =====================
+# ===================== ADMIN PANEL =====================
 
 async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_user.id != ADMIN_ID:
-        return await update.message.reply_text("⛔ Access Denied")
+        await update.message.reply_text("⛔ Access Denied")
+        return
 
     await update.message.reply_text(
         "👑 ADMIN PANEL\n\n"
         "/stats - users\n"
         "/users - list users\n"
-        "/ping - test bot"
+        "/ping - bot test\n"
     )
 
 async def users_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -91,27 +108,31 @@ async def users_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not users:
         return await update.message.reply_text("No users yet")
 
-    await update.message.reply_text("👥 USERS:\n" + "\n".join(str(u) for u in list(users)[:50]))
+    text = "👥 USERS:\n\n" + "\n".join(str(u) for u in list(users)[:50])
+    await update.message.reply_text(text)
 
-# ===================== AI COMMAND =====================
+# ===================== AI CHAT =====================
 
 async def ai_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = " ".join(context.args)
 
     if not text:
-        return await update.message.reply_text("Usage: /ai hello")
+        await update.message.reply_text("Usage: /ai hello")
+        return
 
     await update.message.reply_text(ask_ai(text))
 
-# ===================== CHAT =====================
+# ===================== SMART CHAT =====================
 
 async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     users.add(update.effective_user.id)
 
-    reply = ask_ai(update.message.text)
+    text = update.message.text
+    reply = ask_ai(text)
+
     await update.message.reply_text(reply)
 
-# ===================== BOOT =====================
+# ===================== APP =====================
 
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN missing")
