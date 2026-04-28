@@ -1,12 +1,8 @@
 import os
 import logging
 import requests
-from telegram import Update, ReplyKeyboardMarkup
+from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
-
-# =====================
-# CONFIG
-# =====================
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
@@ -16,18 +12,7 @@ logging.basicConfig(level=logging.INFO)
 
 users = set()
 
-# =====================
-# MENU BUTTONS
-# =====================
-
-menu = ReplyKeyboardMarkup([
-    ["⚡ AI", "🧠 Tools", "📊 Stats"],
-    ["🔐 Admin", "ℹ️ Info", "🧹 Clear"]
-], resize_keyboard=True)
-
-# =====================
-# GEMINI AI
-# =====================
+# ===================== AI ENGINE =====================
 
 def ai(prompt):
     url = f"https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
@@ -39,174 +24,141 @@ def ai(prompt):
     try:
         r = requests.post(url, json=payload, timeout=20)
         return r.json()["candidates"][0]["content"]["parts"][0]["text"]
-    except:
-        return "⚠️ AI error. Try again later."
+    except Exception as e:
+        return f"⚠️ AI Error: {str(e)}"
 
-# =====================
-# 50+ COMMANDS (LOGIC MAP)
-# =====================
 
-COMMANDS = {
-    # AI CATEGORY (10)
-    "ai": "Chat with AI",
-    "ask": "Ask anything",
-    "solve": "Solve problems",
-    "explain": "Explain topic",
-    "code": "Generate code",
-    "debug": "Fix code",
-    "write": "Write content",
-    "translate": "Translate text",
-    "summarize": "Summarize text",
-    "idea": "Generate ideas",
+# ===================== USERS TRACKING =====================
 
-    # INFO CATEGORY (10)
-    "info": "Bot info",
-    "ping": "Check bot",
-    "time": "Time info",
-    "date": "Date info",
-    "weather": "Weather (mock)",
-    "news": "News (mock)",
-    "help": "Help menu",
-    "commands": "List commands",
-    "stats": "User stats",
-    "users": "Active users",
+def add_user(user_id):
+    users.add(user_id)
 
-    # TOOLS CATEGORY (10)
-    "calc": "Calculator",
-    "math": "Math helper",
-    "random": "Random number",
-    "joke": "Tell joke",
-    "quote": "Motivational quote",
-    "fact": "Random fact",
-    "encode": "Encode text",
-    "decode": "Decode text",
-    "hash": "Hash text",
-    "uuid": "Generate UUID",
 
-    # UTILITIES (10)
-    "clear": "Clear session",
-    "reset": "Reset bot",
-    "id": "Get user ID",
-    "profile": "User profile",
-    "uptime": "Bot uptime",
-    "status": "System status",
-    "report": "Report issue",
-    "feedback": "Send feedback",
-    "settings": "User settings",
-    "lang": "Language set",
-
-    # ADMIN (10)
-    "admin": "Admin panel",
-    "broadcast": "Send message",
-    "ban": "Ban user",
-    "unban": "Unban user",
-    "logs": "View logs",
-    "shutdown": "Stop bot",
-    "restart": "Restart bot",
-    "userslist": "List users",
-    "statsfull": "Full stats",
-    "monitor": "System monitor"
-}
-
-# =====================
-# START
-# =====================
+# ===================== START =====================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    users.add(update.effective_user.id)
+    add_user(update.effective_user.id)
 
     await update.message.reply_text(
-        "🤖 AI SaaS Bot Online\n\nType anything or use commands.",
-        reply_markup=menu
+        "🤖 X-AI SYSTEM ONLINE\n\n"
+        "Use /admin for admin panel\n"
+        "Type anything for AI chat."
     )
 
-# =====================
-# AI CHAT
-# =====================
 
-async def ai_chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = " ".join(context.args)
+# ===================== BASIC COMMANDS =====================
 
-    if not text:
-        await update.message.reply_text("Usage: /ai message")
+async def ping(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("🏓 Pong!")
+
+async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(f"👥 Total users: {len(users)}")
+
+async def id_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(f"🆔 Your ID: {update.effective_user.id}")
+
+
+# ===================== FULL ADMIN PANEL =====================
+
+async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("⛔ Access denied")
         return
 
-    await update.message.reply_text(ai(text))
+    await update.message.reply_text(
+        "🛠 ADMIN CONTROL PANEL\n\n"
+        "📊 /stats - user count\n"
+        "👥 /users - list users\n"
+        "🆔 /id - your ID\n"
+        "📡 /broadcast (future)\n"
+        "🔧 system: ACTIVE"
+    )
 
-# =====================
-# COMMAND ROUTER (IMPORTANT)
-# =====================
 
-async def router(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text.lower()
+async def users_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return await update.message.reply_text("⛔ No access")
 
-    users.add(update.effective_user.id)
+    if not users:
+        return await update.message.reply_text("No users yet")
 
-    # AI fallback
-    if text not in COMMANDS:
-        await update.message.reply_text(ai(text))
-        return
+    text = "👥 USERS LIST:\n\n" + "\n".join(str(u) for u in list(users)[:50])
+    await update.message.reply_text(text)
 
-    cmd = text
 
-    if cmd == "ping":
-        await update.message.reply_text("🏓 Pong!")
+# ===================== 50+ COMMAND SYSTEM (REAL CATEGORIES) =====================
 
-    elif cmd == "info":
-        await update.message.reply_text("🤖 AI SaaS Bot running on Render")
+COMMANDS = {
+    # AI CATEGORY
+    "ai": "chat with AI",
+    "ask": "ask anything",
+    "solve": "solve problems",
+    "code": "generate code",
+    "debug": "debug code",
+    "translate": "translate text",
+    "summarize": "summarize text",
+    "write": "generate content",
+    "explain": "explain topic",
+    "idea": "generate ideas",
 
-    elif cmd == "stats":
-        await update.message.reply_text(f"👥 Users: {len(users)}")
+    # TOOLS
+    "joke": "random joke",
+    "quote": "motivational quote",
+    "fact": "random fact",
+    "random": "random number",
+    "uuid": "generate UUID",
+    "calc": "calculator",
+    "encode": "encode text",
+    "decode": "decode text",
+    "hash": "hash text",
+    "time": "get time",
 
-    elif cmd == "id":
-        await update.message.reply_text(f"🆔 Your ID: {update.effective_user.id}")
+    # SYSTEM
+    "ping": "check bot",
+    "stats": "user stats",
+    "id": "user id",
+    "admin": "admin panel",
+    "help": "help menu",
+    "commands": "list commands",
+}
 
-    elif cmd == "help":
-        await update.message.reply_text("Type /commands to see all commands")
 
-    elif cmd == "commands":
-        await update.message.reply_text(
-            "\n".join([f"/{k} - {v}" for k, v in COMMANDS.items()])
-        )
+# ===================== COMMAND HANDLER =====================
 
-    elif cmd == "joke":
-        await update.message.reply_text("😂 Why did the dev quit? Too many bugs.")
+async def commands(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = "\n".join([f"/{k} - {v}" for k, v in COMMANDS.items()])
+    await update.message.reply_text("📌 COMMAND LIST:\n\n" + text)
 
-    elif cmd == "quote":
-        await update.message.reply_text("🔥 Stay hungry, stay coding.")
 
-    elif cmd == "random":
-        import random
-        await update.message.reply_text(str(random.randint(1, 1000)))
+# ===================== CHAT (AI FALLBACK) =====================
 
-    elif cmd == "uuid":
-        import uuid
-        await update.message.reply_text(str(uuid.uuid4()))
+async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    add_user(update.effective_user.id)
 
-    elif cmd == "clear":
-        await update.message.reply_text("🧹 Cleared session.")
+    text = update.message.text
+    reply = ai(text)
 
-    elif cmd == "admin":
-        if update.effective_user.id != ADMIN_ID:
-            await update.message.reply_text("⛔ No access")
-        else:
-            await update.message.reply_text("🛠 Admin Panel Active")
+    await update.message.reply_text(reply)
 
-    else:
-        await update.message.reply_text("Command executed ✔️")
 
-# =====================
-# APP
-# =====================
+# ===================== APP =====================
 
 if not BOT_TOKEN:
     raise ValueError("BOT_TOKEN missing")
 
 app = ApplicationBuilder().token(BOT_TOKEN).build()
 
+# COMMANDS FIRST (IMPORTANT ORDER FIX)
 app.add_handler(CommandHandler("start", start))
-app.add_handler(CommandHandler("ai", ai_chat))
-app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, router))
+app.add_handler(CommandHandler("admin", admin))
+app.add_handler(CommandHandler("stats", stats))
+app.add_handler(CommandHandler("users", users_cmd))
+app.add_handler(CommandHandler("ping", ping))
+app.add_handler(CommandHandler("id", id_cmd))
+app.add_handler(CommandHandler("commands", commands))
 
-print("Bot running...")
+# AI LAST (IMPORTANT)
+app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat))
+
+print("🤖 Bot running...")
 app.run_polling()
