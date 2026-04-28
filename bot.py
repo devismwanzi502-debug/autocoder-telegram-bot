@@ -1,19 +1,13 @@
 import os
+import json
 import logging
 import requests
-import json
-from telegram import (
-    Update,
-    ReplyKeyboardMarkup,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup
-)
+from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
     MessageHandler,
     ContextTypes,
-    CallbackQueryHandler,
     filters
 )
 
@@ -47,9 +41,17 @@ def init_user(uid):
         db[str(uid)] = {
             "xp": 0,
             "level": 1,
-            "messages": []
+            "memory": []
         }
         save_db()
+
+def add_memory(uid, text):
+    db[str(uid)]["memory"].append(text)
+    db[str(uid)]["memory"] = db[str(uid)]["memory"][-10:]
+    save_db()
+
+def get_memory(uid):
+    return " | ".join(db[str(uid)]["memory"])
 
 def add_xp(uid):
     user = db[str(uid)]
@@ -61,53 +63,29 @@ def add_xp(uid):
 
     save_db()
 
-def add_memory(uid, text):
-    db[str(uid)]["messages"].append(text)
-    db[str(uid)]["messages"] = db[str(uid)]["messages"][-10:]
-    save_db()
-
-def get_memory(uid):
-    return " | ".join(db[str(uid)]["messages"])
-
-# ===================== UI =====================
-
-menu = ReplyKeyboardMarkup([
-    ["🤖 AI Chat", "👑 Admin Panel"],
-    ["🧑‍💻 Level"]
-], resize_keyboard=True)
-
-admin_menu = InlineKeyboardMarkup([
-    [InlineKeyboardButton("📊 Stats", callback_data="stats")],
-    [InlineKeyboardButton("👥 Users", callback_data="users")],
-    [InlineKeyboardButton("🏓 Ping", callback_data="ping")],
-    [InlineKeyboardButton("🔙 Close", callback_data="back")]
-])
-
 # ===================== AI ENGINE =====================
-
-cache = {}
 
 def ask_ai(prompt, uid):
 
     init_user(uid)
     add_xp(uid)
 
-    if prompt in cache:
-        return cache[prompt]
-
     memory = get_memory(uid)
     level = db[str(uid)]["level"]
 
-    final_prompt = f"""
+    system_prompt = f"""
+You are an advanced AI system inside a Telegram bot.
+
 User Level: {level}
 
-Memory:
+User Memory:
 {memory}
 
-User:
-{prompt}
+IMPORTANT TASK:
+Generate useful, creative responses OR suggest dynamic categories when asked.
 
-Respond clearly and naturally.
+User Message:
+{prompt}
 """
 
     url = "https://api.groq.com/openai/v1/chat/completions"
@@ -119,7 +97,7 @@ Respond clearly and naturally.
 
     payload = {
         "model": "llama-3.3-70b-versatile",
-        "messages": [{"role": "user", "content": final_prompt}]
+        "messages": [{"role": "user", "content": system_prompt}]
     }
 
     try:
@@ -131,13 +109,19 @@ Respond clearly and naturally.
 
         reply = data["choices"][0]["message"]["content"]
 
-        cache[prompt] = reply
         add_memory(uid, prompt)
 
         return reply
 
     except Exception as e:
         return f"⚠️ AI Crash: {str(e)}"
+
+# ===================== MAIN MENU =====================
+
+menu = ReplyKeyboardMarkup([
+    ["🤖 AI HUB"],
+    ["⚡ Generate Menu"]
+], resize_keyboard=True)
 
 # ===================== START =====================
 
@@ -146,54 +130,39 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     init_user(uid)
 
     await update.message.reply_text(
-        "🤖 X AI SYSTEM ONLINE\n\nWelcome!",
+        "🤖 DYNAMIC AI SYSTEM ONLINE\n\nNo fixed categories — AI creates everything.",
         reply_markup=menu
     )
 
-# ===================== LEVEL =====================
+# ===================== DYNAMIC MENU GENERATOR =====================
 
-async def level(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def generate_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
-    init_user(uid)
 
-    lvl = db[str(uid)]["level"]
-    xp = db[str(uid)]["xp"]
+    prompt = """
+Create 6 creative Telegram bot categories.
+Each category must be short (1-2 words only).
+Make them unique, futuristic, and useful.
+Return ONLY the list.
+"""
+
+    result = ask_ai(prompt, uid)
+
+    # convert AI output into buttons
+    items = result.split("\n")
+    items = [i.strip("-• ") for i in items if i.strip()]
+
+    keyboard = [[item] for item in items[:6]]
 
     await update.message.reply_text(
-        f"🧑‍💻 Level: {lvl}\n⚡ XP: {xp}/{lvl * 5}"
+        "⚡ AI GENERATED MENU:",
+        reply_markup=ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
     )
 
-# ===================== ADMIN =====================
+# ===================== AI HUB =====================
 
-async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != ADMIN_ID:
-        return await update.message.reply_text("⛔ Access Denied")
-
-    await update.message.reply_text("👑 Admin Panel", reply_markup=admin_menu)
-
-# ===================== BUTTONS =====================
-
-async def buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-
-    uid = q.from_user.id
-
-    if q.data == "stats":
-        await q.edit_message_text(f"👥 Users: {len(db)}")
-
-    elif q.data == "users":
-        if uid != ADMIN_ID:
-            return await q.edit_message_text("⛔ No access")
-
-        text = "👥 USERS:\n\n" + "\n".join(list(db.keys())[:50])
-        await q.edit_message_text(text)
-
-    elif q.data == "ping":
-        await q.edit_message_text("🏓 Pong!")
-
-    elif q.data == "back":
-        await q.edit_message_text("👑 Closed")
+async def ai_hub(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("💬 Talk to AI directly — no limits.")
 
 # ===================== CHAT =====================
 
@@ -203,14 +172,11 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     text = update.message.text
 
-    if text == "🤖 AI Chat":
-        return await update.message.reply_text("💬 Send anything...")
+    if text == "🤖 AI HUB":
+        return await ai_hub(update, context)
 
-    if text == "👑 Admin Panel":
-        return await admin(update, context)
-
-    if text == "🧑‍💻 Level":
-        return await level(update, context)
+    if text == "⚡ Generate Menu":
+        return await generate_menu(update, context)
 
     reply = ask_ai(text, uid)
     await update.message.reply_text(reply)
@@ -223,11 +189,7 @@ if not BOT_TOKEN:
 app = ApplicationBuilder().token(BOT_TOKEN).build()
 
 app.add_handler(CommandHandler("start", start))
-app.add_handler(CommandHandler("admin", admin))
-app.add_handler(CommandHandler("level", level))
-
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat))
-app.add_handler(CallbackQueryHandler(buttons))
 
-print("🤖 Bot running...")
+print("🤖 Dynamic AI Bot Running...")
 app.run_polling()
