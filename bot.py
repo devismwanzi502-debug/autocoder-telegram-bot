@@ -1,177 +1,237 @@
 import os
 import logging
 import requests
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, ReplyKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
     MessageHandler,
-    CallbackQueryHandler,
     ContextTypes,
-    filters
+    filters,
 )
 
-# ======================
-# LOGGING (IMPORTANT)
-# ======================
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO
-)
+# =========================
+# CONFIG
+# =========================
 
-# ======================
-# ENV VARIABLES
-# ======================
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+ADMIN_ID = int(os.getenv("ADMIN_ID", "0"))
 
 if not BOT_TOKEN:
-    raise ValueError("Missing BOT_TOKEN in environment")
+    raise ValueError("BOT_TOKEN missing")
 
 if not GEMINI_API_KEY:
-    raise ValueError("Missing GEMINI_API_KEY in environment")
+    raise ValueError("GEMINI_API_KEY missing")
 
-# ======================
-# SIMPLE MEMORY (SESSION)
-# ======================
-user_memory = {}
+URL = f"https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
 
-# ======================
-# GEMINI CALL
-# ======================
-def ask_gemini(prompt: str):
+# =========================
+# MEMORY (simple runtime)
+# =========================
+
+users = set()
+banned = set()
+
+# =========================
+# LOGGING
+# =========================
+
+logging.basicConfig(level=logging.INFO)
+
+# =========================
+# AI FUNCTION
+# =========================
+
+def ask_ai(text: str) -> str:
     try:
-        url = f"https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
-
         payload = {
-            "contents": [
-                {"parts": [{"text": prompt}]}
-            ]
+            "contents": [{"parts": [{"text": text}]}]
         }
-
-        res = requests.post(url, json=payload, timeout=20)
-        return res.json()
-
+        res = requests.post(URL, json=payload, timeout=20)
+        data = res.json()
+        return data["candidates"][0]["content"]["parts"][0]["text"]
     except Exception as e:
-        return {"error": str(e)}
+        logging.error(e)
+        return "⚠️ AI error. Try again."
 
-# ======================
-# MENU BUTTONS
-# ======================
-def main_menu():
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("💬 Chat AI", callback_data="chat")],
-        [InlineKeyboardButton("📜 Help", callback_data="help")],
-        [InlineKeyboardButton("📊 Status", callback_data="status")]
-    ])
+# =========================
+# BUTTON MENU (CATEGORIES)
+# =========================
 
-# ======================
+menu = ReplyKeyboardMarkup(
+    [
+        ["💬 AI Chat", "📚 Education"],
+        ["🧠 Coding", "🧰 Tools"],
+        ["🎮 Fun", "⚡ Utilities"],
+        ["🛠 Admin Panel"]
+    ],
+    resize_keyboard=True
+)
+
+# =========================
 # START
-# ======================
+# =========================
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    users.add(uid)
+
     await update.message.reply_text(
-        "👋 Welcome to AutoCoder AI Bot v2\nChoose below:",
-        reply_markup=main_menu()
+        "🤖 *AI BOT ONLINE*\nChoose a category:",
+        reply_markup=menu,
+        parse_mode="Markdown"
     )
 
-# ======================
-# HELP
-# ======================
-async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = (
-        "🧠 Commands:\n"
-        "/start - menu\n"
-        "/help - help\n"
-        "/ping - check bot\n"
-        "/clear - reset memory\n\n"
-        "💬 Just type anything to chat with AI"
+# =========================
+# ADMIN PANEL
+# =========================
+
+async def admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        await update.message.reply_text("❌ No access")
+        return
+
+    await update.message.reply_text(
+        "🛠 ADMIN PANEL\n\n"
+        "/stats - bot stats\n"
+        "/broadcast msg - send to all\n"
+        "/ban id\n"
+        "/unban id"
     )
-    await update.message.reply_text(text)
 
-# ======================
-# PING
-# ======================
-async def ping(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("✅ Bot is alive and running")
+async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
 
-# ======================
-# CLEAR MEMORY
-# ======================
-async def clear(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_memory.pop(update.effective_user.id, None)
-    await update.message.reply_text("🧹 Memory cleared")
+    await update.message.reply_text(
+        f"📊 STATS\nUsers: {len(users)}\nBanned: {len(banned)}"
+    )
 
-# ======================
-# CALLBACK MENU HANDLER
-# ======================
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
+async def broadcast(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
 
-    if query.data == "help":
-        await query.edit_message_text(
-            "🧠 Help Menu\nUse /help or just chat with AI"
-        )
+    msg = " ".join(context.args)
+    for u in users:
+        if u not in banned:
+            try:
+                await context.bot.send_message(u, f"📢 {msg}")
+            except:
+                pass
 
-    elif query.data == "chat":
-        await query.edit_message_text("💬 Just send a message to chat with AI")
+    await update.message.reply_text("✅ Sent")
 
-    elif query.data == "status":
-        await query.edit_message_text("📊 Bot is running normally 🚀")
-
-# ======================
-# CHAT HANDLER (AI)
-# ======================
-async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    text = update.message.text
-
-    # store memory
-    if user_id not in user_memory:
-        user_memory[user_id] = []
-
-    user_memory[user_id].append(text)
-    last_context = "\n".join(user_memory[user_id][-5:])
-
-    prompt = f"User chat history:\n{last_context}\n\nUser: {text}\nAI:"
-
-    data = ask_gemini(prompt)
+async def ban(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
 
     try:
-        reply = data["candidates"][0]["content"]["parts"][0]["text"]
+        uid = int(context.args[0])
+        banned.add(uid)
+        await update.message.reply_text(f"⛔ Banned {uid}")
     except:
-        reply = "⚠ AI error. Try again later."
+        await update.message.reply_text("Usage: /ban id")
 
+async def unban(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != ADMIN_ID:
+        return
+
+    try:
+        uid = int(context.args[0])
+        banned.discard(uid)
+        await update.message.reply_text(f"✅ Unbanned {uid}")
+    except:
+        await update.message.reply_text("Usage: /unban id")
+
+# =========================
+# MESSAGE ROUTER (CATEGORIES)
+# =========================
+
+async def handle(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = update.message.text
+    uid = update.effective_user.id
+
+    users.add(uid)
+
+    if uid in banned:
+        await update.message.reply_text("⛔ You are banned.")
+        return
+
+    # ================= CATEGORIES =================
+
+    if text == "💬 AI Chat":
+        await update.message.reply_text("💬 Send anything to chat with AI.")
+        return
+
+    if text == "📚 Education":
+        await update.message.reply_text(
+            "📚 Topics:\n- Math\n- Science\n- History\n- English"
+        )
+        return
+
+    if text == "🧠 Coding":
+        await update.message.reply_text(
+            "🧠 Coding Help:\n- Python\n- JavaScript\n- HTML\n- Debugging"
+        )
+        return
+
+    if text == "🧰 Tools":
+        await update.message.reply_text(
+            "🧰 Tools:\n- Calculator\n- Converter\n- Search"
+        )
+        return
+
+    if text == "🎮 Fun":
+        await update.message.reply_text(
+            "🎮 Fun Mode:\n- Jokes\n- Facts\n- Games"
+        )
+        return
+
+    if text == "⚡ Utilities":
+        await update.message.reply_text(
+            "⚡ Utilities:\n- Time\n- Weather\n- Notes"
+        )
+        return
+
+    if text == "🛠 Admin Panel":
+        await admin(update, context)
+        return
+
+    # ================= AI RESPONSE =================
+
+    reply = ask_ai(text)
     await update.message.reply_text(reply)
 
-# ======================
-# ERROR HANDLER
-# ======================
-async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
-    logging.error(f"Error: {context.error}")
+# =========================
+# COMMANDS
+# =========================
 
-# ======================
+async def ping(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("⚡ Alive")
+
+async def help_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "/start - menu\n/ping - test\n/admin - admin panel"
+    )
+
+# =========================
 # MAIN
-# ======================
-def main():
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
+# =========================
 
-    # commands
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("help", help_cmd))
-    app.add_handler(CommandHandler("ping", ping))
-    app.add_handler(CommandHandler("clear", clear))
+app = ApplicationBuilder().token(BOT_TOKEN).build()
 
-    # menu buttons
-    app.add_handler(CallbackQueryHandler(button_handler))
+app.add_handler(CommandHandler("start", start))
+app.add_handler(CommandHandler("ping", ping))
+app.add_handler(CommandHandler("help", help_cmd))
 
-    # chat
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat))
+app.add_handler(CommandHandler("admin", admin))
+app.add_handler(CommandHandler("stats", stats))
+app.add_handler(CommandHandler("broadcast", broadcast))
+app.add_handler(CommandHandler("ban", ban))
+app.add_handler(CommandHandler("unban", unban))
 
-    app.add_error_handler(error_handler)
+app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle))
 
-    print("🤖 AutoCoder Bot v2 running...")
-    app.run_polling()
-
-if __name__ == "__main__":
-    main()
+print("🤖 Bot running...")
+app.run_polling()
